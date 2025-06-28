@@ -31,8 +31,10 @@ The entire pipeline lives in a single notebook: **`Quant_AI.ipynb`**, covering:
 | **US30**    | **1.2%**          | **+0.3%**          |
 
 \* P&L is scaled (1.0 = 100%) and reflects notebook-level assumptions (e.g., position sizing, transaction costs).
-> 🔬 **Note on Trade Accuracy**  
+
+> 🧬 **Note on Trade Accuracy**  
 > This is a **low hit rate, high reward** strategy. Despite a **20.7% directional accuracy**, the model yields **+5.5% cumulative P&L**, indicating strong alpha in **tail events**.
+
 > ⚖️ **Why US30?**  
 > Treated as a **control asset**. Using the same pipeline without tuning confirms that the BTC/USD results were not the result of overfitting. The underperformance of US30 highlights the importance of asset-specific feature engineering.
 
