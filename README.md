@@ -1,41 +1,73 @@
-# 📊 Quantitative Research Project  
-### 🎯 End-to-End Signal Generation & Back-Testing for **BTC/USD** (Crypto) and **US30** (Equity Index)  
-`Python` • `PyTorch` • `Pandas` • `NumPy`
+# 📊 Time-Series Modeling & Evaluation Sandbox  
+### 🎯 Methodologically Correct Modeling of Dependent, Nonstationary Data  
+
+`Python` • `NumPy` • `Pandas` • `SciPy` • `Statsmodels` • `scikit-learn` • `PyWavelets`
 
 ---
 
 ## 🔍 1 — What This Repo Contains
 
-This project explores **systematic alpha generation** using machine learning across two distinct asset classes:
+This project is a **research-oriented sandbox** for experimenting with **statistically principled modeling and evaluation of time-indexed data**. The emphasis is not on any specific application domain, but on **how to handle dependence, nonstationarity, event definition, labeling, and validation correctly**.
 
-- 💰 **BTC/USD** – a volatile, decentralized crypto asset  
-- 📈 **US30** – a structured, institutional equity index (Dow Jones)
+The entire pipeline lives in a single notebook: **`Quant_AI.ipynb`**, and implements:
 
-The entire pipeline lives in a single notebook: **`Quant_AI.ipynb`**, covering:
+- 🧹 **Data loading & preprocessing** for time-indexed data  
+- 📉 **Stationarity & memory control** using log transforms and **fractional differencing (FFD)**  
+- ⚡ **Event-based sampling** using **CUSUM filtering** to reduce redundancy in dense time series  
+- 🏷️ **Leakage-aware labeling** with finite-horizon events and vertical barriers  
+- 🧪 **Proper cross-validation** using **Purged K-Fold with an embargo** to avoid overlap-based leakage  
+- 🧱 **Feature engineering** capturing:
+  - volatility and scale structure  
+  - frequency-domain structure (e.g., **wavelet energy**, **spectral entropy**)  
+  - complexity and regime-like behavior (e.g., **Lempel–Ziv complexity**)  
+- 🧠 **Baseline modeling** using Random Forests and simple neural networks  
+- ⚙️ **Scalable computation** with multiprocessing for feature construction  
 
-- 🧹 **Data collection & preprocessing** from Binance and Dukascopy.  
-- ⚙️ **Feature engineering** with technical indicators, wavelet transforms & liquidity metrics  
-- 🧠 **Modeling** using both **PyTorch-based MLP classifiers** and **Random Forests** 
-- 🧪 **Cross-validation** with purged K-folds and embargo periods  
-- 🧾 **Back-testing** with signal-based returns, accuracy, and cumulative P&L
-
-> 💡 No hidden scripts. No complex dependencies. Just open the notebook and run it.
+> 💡 The focus is **methodological correctness and experimental design**, not any specific application result.
 
 ---
 
-## 📈 2 — Performance Snapshot (Raw Results from Notebook)
+## 🧠 2 — What This Project Emphasizes (Statistics-First)
 
-| 🪙 Market   | ✅ Trade Accuracy | 💹 Cumulative P&L* |
-|------------|------------------|-------------------|
-| **BTC/USD** | **20.7%**         | **+5.5%**          |
-| **US30**    | **1.2%**          | **+0.3%**          |
+This notebook is built around several **core statistical issues in time-series modeling**:
 
-\* P&L is scaled (1.0 = 100%) and reflects notebook-level assumptions (e.g., position sizing, transaction costs).
+- 🧮 **Dependence & nonstationarity**
+  - Fractional differencing to reduce long memory while preserving information  
+  - Simple ADF-based diagnostics to guide differencing choices  
 
-> 🧬 **Note on Trade Accuracy**  
-> This is a **low hit rate, high reward** strategy. Despite a **20.7% directional accuracy**, the model yields **+5.5% cumulative P&L**, indicating strong alpha in **tail events**.
+- ⏱️ **Event-driven representations**
+  - CUSUM filters to convert dense time series into an information-driven event sequence  
 
-> ⚖️ **Why US30?**  
-> Treated as a **control asset**. Using the same pipeline without tuning confirms that the BTC/USD results were not the result of overfitting. The underperformance of US30 highlights the importance of asset-specific feature engineering.
+- 🛡️ **Leakage-resistant evaluation**
+  - **Purged cross-validation + embargo** to ensure labels that extend forward in time do not contaminate training data  
 
+- 📐 **Feature construction for temporal structure**
+  - Rolling, volatility, spectral, and complexity-based descriptors  
+
+- ♻️ **Reproducible computational workflow**
+  - Modular feature functions and parallel computation for large-scale experiments  
+
+---
+
+## 🧱 3 — High-Level Pipeline
+
+1. 📥 Load and clean time-indexed data  
+2. 📉 Apply stationarity and memory-control transforms (log, FFD)  
+3. ⚡ Detect events using CUSUM filtering  
+4. 🏷️ Define and label finite-horizon events  
+5. 🧱 Construct rolling and structural features  
+6. 🤖 Train baseline models  
+7. 🧪 Evaluate using **purged cross-validation with embargo**
+
+> 🔬 Models are intentionally simple. The focus is on **experimental design and statistical validity**, not model complexity.
+
+---
+
+## 🧭 4 — Possible Extensions
+
+- 📊 Add probabilistic or Bayesian models  
+- 📏 Add uncertainty quantification and calibration analysis  
+- 🔄 Add diagnostics for distribution shift and structural change  
+- 📚 Study theoretical properties of the sampling and labeling schemes
+  
 ---
