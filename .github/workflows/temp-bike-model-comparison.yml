@@ -1,0 +1,206 @@
+name: temp-bike-model-comparison
+on:
+  push:
+    paths:
+      - ".github/workflows/temp-bike-model-comparison.yml"
+
+jobs:
+  run-models:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -q pandas numpy scikit-learn catboost==1.2.8 pygam==0.11.0
+      - name: Run revised bike forecast experiment
+        shell: bash
+        run: |
+          python - <<'PY'
+          import numpy as np
+          import pandas as pd
+          from sklearn.metrics import mean_absolute_error
+          from catboost import CatBoostRegressor
+          from pygam import LinearGAM, s
+
+          URL = "https://raw.githubusercontent.com/ardasengun04/bike-sharing-data/main/hour.csv"
+          SEED = 42
+          df = pd.read_csv(URL)
+          df["dteday"] = pd.to_datetime(df["dteday"])
+          df["timestamp"] = df["dteday"] + pd.to_timedelta(df["hr"], unit="h")
+          full_hours = pd.date_range(df["timestamp"].min(), df["timestamp"].max(), freq="h")
+          cnt_hourly = df.set_index("timestamp")["cnt"].reindex(full_hours)
+          df["history_end"] = df["dteday"] - pd.Timedelta(days=1) + pd.Timedelta(hours=17)
+
+          weekly_lags = []
+          for weeks in [1,2,3,4]:
+              col=f"cnt_same_hour_{7*weeks}d_ago"
+              df[col]=(df["timestamp"]-pd.Timedelta(days=7*weeks)).map(cnt_hourly)
+              weekly_lags.append(col)
+          df["same_hour_4w_median"] = df[weekly_lags].median(axis=1)
+
+          recent_lag_hours = np.where(df["hr"] <= 17, 24, 48)
+          df["recent_known_same_hour"] = (
+              df["timestamp"] - pd.to_timedelta(recent_lag_hours, unit="h")
+          ).map(cnt_hourly)
+
+          roll_7d_total = cnt_hourly.rolling(168, min_periods=1).sum()
+          roll_7d_n = cnt_hourly.rolling(168, min_periods=1).count()
+          df["recent_7d_total"] = df["history_end"].map(roll_7d_total)
+          df["recent_7d_n"] = df["history_end"].map(roll_7d_n)
+          old_history_end = df["history_end"] - pd.Timedelta(days=28)
+          df["prior_7d_total_4w_ago"] = old_history_end.map(roll_7d_total)
+          df["prior_7d_n_4w_ago"] = old_history_end.map(roll_7d_n)
+          df["demand_level_ratio"] = (
+              df["recent_7d_total"] / df["prior_7d_total_4w_ago"]
+          ).clip(0.6,1.4)
+
+          HISTORY = weekly_lags + [
+              "same_hour_4w_median","recent_known_same_hour",
+              "recent_7d_total","recent_7d_n",
+              "prior_7d_total_4w_ago","prior_7d_n_4w_ago",
+              "demand_level_ratio"
+          ]
+
+          df["scaled_weekly_median"] = (
+              df["same_hour_4w_median"] * df["demand_level_ratio"].pow(0.3)
+          )
+          df["R1_simple_rule"] = (
+              0.90*df["scaled_weekly_median"] + 0.10*df["recent_known_same_hour"]
+          )
+
+          weather_cols=["weathersit","temp","atemp","hum","windspeed"]
+          weather_hourly=df.set_index("timestamp")[weather_cols].reindex(full_hours)
+          ws_mode=weather_hourly["weathersit"].rolling(12,min_periods=1).apply(
+              lambda x: x.mode().iloc[0], raw=False
+          )
+          ws_n=weather_hourly["weathersit"].rolling(12,min_periods=1).count()
+          df["weathersit_mode_12h"]=df["history_end"].map(ws_mode)
+          df["weathersit_12h_n"]=df["history_end"].map(ws_n)
+          for col in ["temp","atemp","hum","windspeed"]:
+              rm=weather_hourly[col].rolling(24,min_periods=1).mean()
+              df[f"{col}_mean_24h"]=df["history_end"].map(rm)
+          df["weather_24h_n"]=df["history_end"].map(
+              weather_hourly["temp"].rolling(24,min_periods=1).count()
+          )
+          WEATHER=[
+              "weathersit_mode_12h","weathersit_12h_n",
+              "temp_mean_24h","atemp_mean_24h","hum_mean_24h",
+              "windspeed_mean_24h","weather_24h_n"
+          ]
+
+          folds = {
+              "fall": {"train_end":"2011-09-30","val_start":"2011-10-01","val_end":"2011-11-30"},
+              "winter":{"train_end":"2011-12-31","val_start":"2012-01-01","val_end":"2012-02-29"},
+              "spring":{"train_end":"2012-02-29","val_start":"2012-03-01","val_end":"2012-04-30"},
+              "summer":{"train_end":"2012-05-31","val_start":"2012-06-01","val_end":"2012-07-31"},
+          }
+          final_holdout_start=pd.Timestamp("2012-08-01")
+          dev=df[df["timestamp"] < final_holdout_start].copy()
+          holdout=df[df["timestamp"] >= final_holdout_start].copy()
+          required=list(dict.fromkeys(HISTORY+WEATHER+["cnt","R1_simple_rule"]))
+          dev=dev.dropna(subset=required).copy()
+          holdout=holdout.dropna(subset=required).copy()
+
+          feature_sets={
+              "CB-H": HISTORY,
+              "GAM-H": HISTORY,
+              "CB-HW": HISTORY+WEATHER,
+              "GAM-HW": HISTORY+WEATHER,
+          }
+
+          def make_gam(features):
+              terms=None
+              for i,col in enumerate(features):
+                  ns=4 if col=="weathersit_mode_12h" else 10
+                  term=s(i,n_splines=ns)
+                  terms=term if terms is None else terms+term
+              return LinearGAM(terms)
+
+          rows=[]
+          oof=dev[["cnt"]].copy()
+          for col in ["B0","R1","CB-H","GAM-H","CB-HW","GAM-HW"]:
+              oof[col]=np.nan
+
+          for fold_name,split in folds.items():
+              train_end=pd.Timestamp(split["train_end"])+pd.Timedelta(hours=17)
+              val_start=pd.Timestamp(split["val_start"])
+              val_end=pd.Timestamp(split["val_end"])
+              train=dev[dev["timestamp"]<=train_end].copy()
+              val=dev[dev["dteday"].between(val_start,val_end)].copy()
+
+              preds={
+                  "B0": val["cnt_same_hour_7d_ago"].to_numpy(),
+                  "R1": val["R1_simple_rule"].to_numpy(),
+              }
+
+              for name in ["CB-H","CB-HW"]:
+                  feats=feature_sets[name]
+                  Xtr=train[feats].copy(); Xv=val[feats].copy()
+                  cats=[c for c in feats if c=="weathersit_mode_12h"]
+                  for c in cats:
+                      Xtr[c]=Xtr[c].astype(str); Xv[c]=Xv[c].astype(str)
+                  model=CatBoostRegressor(
+                      loss_function="MAE",iterations=500,depth=6,
+                      learning_rate=0.05,random_seed=SEED,
+                      verbose=False,allow_writing_files=False
+                  )
+                  model.fit(Xtr,train["cnt"],cat_features=cats)
+                  preds[name]=model.predict(Xv)
+
+              for name in ["GAM-H","GAM-HW"]:
+                  feats=feature_sets[name]
+                  gam=make_gam(feats)
+                  gam.fit(train[feats].to_numpy(),train["cnt"].to_numpy())
+                  preds[name]=gam.predict(val[feats].to_numpy())
+
+              for name,pred in preds.items():
+                  oof.loc[val.index,name]=pred
+                  rows.append({
+                      "model":name,"fold":fold_name,
+                      "MAE":mean_absolute_error(val["cnt"],pred),"n":len(val)
+                  })
+
+          results=pd.DataFrame(rows)
+          fold_table=results.pivot(index="model",columns="fold",values="MAE")
+          pooled={}
+          for name in ["B0","R1","CB-H","GAM-H","CB-HW","GAM-HW"]:
+              m=oof[name].notna()
+              pooled[name]=mean_absolute_error(oof.loc[m,"cnt"],oof.loc[m,name])
+          fold_table["pooled"]=pd.Series(pooled)
+
+          hp=holdout.copy()
+          hp["B0"]=hp["cnt_same_hour_7d_ago"]
+          hp["R1"]=hp["R1_simple_rule"]
+          for name in ["CB-H","CB-HW"]:
+              feats=feature_sets[name]
+              Xtr=dev[feats].copy(); Xt=holdout[feats].copy()
+              cats=[c for c in feats if c=="weathersit_mode_12h"]
+              for c in cats:
+                  Xtr[c]=Xtr[c].astype(str); Xt[c]=Xt[c].astype(str)
+              model=CatBoostRegressor(
+                  loss_function="MAE",iterations=500,depth=6,
+                  learning_rate=0.05,random_seed=SEED,
+                  verbose=False,allow_writing_files=False
+              )
+              model.fit(Xtr,dev["cnt"],cat_features=cats)
+              hp[name]=model.predict(Xt)
+          for name in ["GAM-H","GAM-HW"]:
+              feats=feature_sets[name]
+              gam=make_gam(feats)
+              gam.fit(dev[feats].to_numpy(),dev["cnt"].to_numpy())
+              hp[name]=gam.predict(holdout[feats].to_numpy())
+          fold_table["holdout_aug_dec_2012"] = pd.Series({
+              n:mean_absolute_error(hp["cnt"],hp[n])
+              for n in ["B0","R1","CB-H","GAM-H","CB-HW","GAM-HW"]
+          })
+
+          order=["B0","R1","CB-H","GAM-H","CB-HW","GAM-HW"]
+          fold_table=fold_table.reindex(order)
+          print("RESULTS_BEGIN")
+          print(f"DEV_COMMON_ROWS={len(dev)} HOLDOUT_COMMON_ROWS={len(holdout)}")
+          print(fold_table.round(4).to_csv())
+          print("RESULTS_END")
+          PY
